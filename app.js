@@ -675,7 +675,7 @@
         if (cfgReady()) doSync(); else { ui.tab = 'set'; saveUI(); render(); }
         break;
       case 'savecfg':
-        cfg = { owner: $('#s-owner').value.trim(), repo: $('#s-repo').value.trim(), path: $('#s-path').value.trim() || 'fuel.json', token: $('#s-token').value.replace(/[^!-~]/g, '') };
+        cfg = { owner: $('#s-owner').value.replace(/ /g, '').trim(), repo: $('#s-repo').value.replace(/ /g, '').trim(), path: $('#s-path').value.trim() || 'fuel.json', token: $('#s-token').value.replace(/[^!-~]/g, '') };
         store.set(LS.cfg, cfg);
         if (!cfgReady()) { toast('账号、仓库、令牌三项都要填'); renderSync(); break; }
         doSync().then(() => toast(sync.state === 'ok' ? '同步好了' : syncText(true)));
