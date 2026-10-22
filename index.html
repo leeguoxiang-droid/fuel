@@ -17,7 +17,10 @@
 <body>
   <header class="top">
     <div class="car" id="car"></div>
-    <button class="sync" id="sync" data-act="sync" type="button"></button>
+    <div class="right">
+      <button class="sync" id="sync" data-act="sync" type="button"></button>
+      <button class="gear" data-tab="set" type="button" aria-label="设置"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg></button>
+    </div>
   </header>
   <main id="view"></main>
   <nav class="tabs">
@@ -25,7 +28,7 @@
     <button data-tab="list" type="button"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>记录</button>
     <button class="add" data-act="add" type="button" aria-label="记一次加油"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <button data-tab="stats" type="button"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>统计</button>
-    <button data-tab="set" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>设置</button>
+    <button data-tab="map" type="button"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>地图</button>
   </nav>
   <div class="sheet" id="sheet" hidden></div>
   <div class="toast" id="toast" hidden></div>

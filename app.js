@@ -14,6 +14,10 @@
   let editSeq = 0;
   const saveDB = () => store.set(LS.data, db);
   const saveUI = () => store.set(LS.ui, ui);
+  const FUEL_NAME = 'RON95汽油';
+  // 旧记录的「中级汽油」统一改名（改了会跟着同步上去）
+  const migrate = (recs) => recs.map((r) => (r.type === 'fuel' && (!r.item || r.item === '中级汽油') ? { ...r, item: FUEL_NAME, updatedAt: Date.now() } : r));
+  { const m = migrate(db.records); if (m.some((r, i) => r !== db.records[i])) { db.records = m; db.dirty = true; saveDB(); } }
 
   // ---------- 小工具 ----------
   const $ = (s) => document.querySelector(s);
@@ -76,21 +80,27 @@
   function render() {
     document.documentElement.toggleAttribute('data-theme', ui.theme !== 'auto');
     if (ui.theme !== 'auto') document.documentElement.dataset.theme = ui.theme;
-    $('#car').textContent = db.meta.car || '我的车';
-    document.querySelectorAll('.tabs [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === ui.tab));
+    carHead();
+    document.querySelectorAll('.tabs [data-tab], .top [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === ui.tab));
     renderSync();
     const A = analyze();
     const v = $('#view');
-    v.innerHTML = { home: viewHome, list: viewList, stats: viewStats, set: viewSet }[ui.tab](A);
+    if (mapObj) { mapObj.remove(); mapObj = null; }
+    v.innerHTML = ({ home: viewHome, list: viewList, stats: viewStats, set: viewSet, map: viewMap }[ui.tab] || viewHome)(A);
+    if (ui.tab === 'map') drawMap();
     if (ui.tab === 'stats') drawCharts(A);
     if (ui.tab === 'set') fillSettings();
+  }
+
+  function carHead() {
+    $('#car').innerHTML = esc(db.meta.car || '我的车') + (db.meta.model ? `<small>${esc(db.meta.model)}</small>` : '');
   }
 
   function rowHTML(r, A) {
     const i = A.info.get(r.id);
     let title, sub;
     if (r.type === 'fuel') {
-      title = r.item || '中级汽油';
+      title = r.station?.name || r.item || FUEL_NAME;
       sub = [`${km(r.odo)} km`, i && i.kmL != null ? `<b>${fmt(i.kmL, 3)} km/L</b>` : '', r.liters ? `${fmt(r.liters, 3)} L` : ''].filter(Boolean).join(' · ');
     } else {
       title = r.item || '服务';
@@ -99,7 +109,7 @@
     return `<button class="row" type="button" data-id="${esc(r.id)}">
       <span class="ico ${r.type}">${ICON[r.type]}</span>
       <span class="main">
-        <span class="t1"><span class="name">${esc(title)}</span>${r.member ? '<span class="tag">会员</span>' : ''}<span class="amt">${rm(r.total)}</span></span>
+        <span class="t1"><span class="name">${esc(title)}</span><span class="amt">${rm(r.total)}</span></span>
         <span class="t2"><span>${sub}</span><span class="date">${md(r.date)}</span></span>
       </span></button>`;
   }
@@ -136,7 +146,7 @@
       </div>
       <div class="card">
         <h2>上次加油<small>${ago === 0 ? '今天' : ago + ' 天前'}</small></h2>
-        <div>${md(last.date)} · ${km(last.odo)} km · <b>${rm(last.total)}</b> · ${fmt(last.liters, 3)} L · RM${fmt(last.price, 2)}/L</div>
+        <div>${last.station?.name ? `${esc(last.station.name)}<br>` : ''}${md(last.date)} · ${km(last.odo)} km · <b>${rm(last.total)}</b> · ${fmt(last.liters, 3)} L · RM${fmt(last.price, 2)}/L</div>
       </div>
       <div class="month"><b>最近记录</b></div>
       <div class="list">${A.recs.slice(-5).reverse().map((r) => rowHTML(r, A)).join('')}</div>
@@ -197,7 +207,7 @@
   function viewSet() {
     return `
       <div class="card"><h2>车辆</h2>
-        <label class="field"><span>显示名称</span><input id="s-car" maxlength="40"></label>
+        <div class="pair"><label class="field"><span>车牌</span><input id="s-car" maxlength="20" autocapitalize="characters"></label><label class="field"><span>车型</span><input id="s-model" maxlength="40" placeholder="例：Perodua Alza 2022"></label></div>
         <label class="field"><span>外观</span><select id="s-theme"><option value="auto">跟随手机</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
       </div>
       <div class="card"><h2>GitHub 同步</h2>
@@ -231,14 +241,17 @@
 
   function fillSettings() {
     $('#s-car').value = db.meta.car || '';
+    $('#s-model').value = db.meta.model || '';
     $('#s-theme').value = ui.theme;
     $('#s-owner').value = cfg.owner; $('#s-repo').value = cfg.repo;
     $('#s-path').value = cfg.path || 'fuel.json'; $('#s-token').value = cfg.token;
     $('#s-status').textContent = syncText(true);
-    $('#s-car').addEventListener('change', (e) => {
-      db.meta = { car: e.target.value.trim() || '我的车', updatedAt: Date.now() };
-      db.dirty = true; editSeq++; saveDB(); $('#car').textContent = db.meta.car; scheduleSync();
-    });
+    const carChange = () => {
+      db.meta = { car: $('#s-car').value.trim() || '我的车', model: $('#s-model').value.trim(), updatedAt: Date.now() };
+      db.dirty = true; editSeq++; saveDB(); carHead(); scheduleSync();
+    };
+    $('#s-car').addEventListener('change', carChange);
+    $('#s-model').addEventListener('change', carChange);
     $('#s-theme').addEventListener('change', (e) => { ui.theme = e.target.value; saveUI(); render(); });
     $('#f-csv').addEventListener('change', (e) => readFile(e.target, (t) => {
       const r = importCSV(t);
@@ -406,14 +419,88 @@
     document.addEventListener('pointerdown', (e) => { if (!host.contains(e.target)) hide(); }, { capture: true });
   }
 
+  // ---------- 油站与地图 ----------
+  const stKey = (s) => s.id || `${s.name}|${s.lat != null ? s.lat.toFixed(4) + ',' + s.lon.toFixed(4) : ''}`;
+  function stations(A) {
+    const m = new Map();
+    for (const r of A.fuel) {
+      const s = r.station; if (!s || !s.name) continue;
+      const k = stKey(s), o = m.get(k) || { s, n: 0, spend: 0, last: null };
+      o.n++; o.spend += r.total; o.last = r; o.s = s; m.set(k, o);
+    }
+    return [...m.values()];
+  }
+  const dist = (m) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${fmt(m / 1000, 1)} km`);
+  const haversine = (a, b, c, d) => { const t = Math.PI / 180, x = Math.sin(((c - a) * t) / 2), y = Math.sin(((d - b) * t) / 2); return 2 * 6371e3 * Math.asin(Math.sqrt(x * x + Math.cos(a * t) * Math.cos(c * t) * y * y)); };
+  // 附近油站来自 OpenStreetMap（Overpass），免费、不用钥匙
+  const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  async function overpass(q) {
+    let last;
+    for (const url of OVERPASS) {
+      const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 35000);
+      try {
+        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ac.signal });
+        if (res.ok) return (await res.json()).elements || [];
+        last = new Error('overpass ' + res.status);
+      } catch (e) { last = e; } finally { clearTimeout(timer); }
+    }
+    throw last;
+  }
+  async function nearbyStations(lat, lon) {
+    for (const rad of [5000]) {
+      const els = await overpass(`[out:json][timeout:30];(node["amenity"="fuel"](around:${rad},${lat},${lon});way["amenity"="fuel"](around:${rad},${lat},${lon}););out center tags;`);
+      const list = els.filter((e) => (e.lat ?? e.center?.lat) != null).map((e) => {
+        const t = e.tags || {}, la = e.lat ?? e.center.lat, lo = e.lon ?? e.center.lon;
+        const name = t.name || t['name:en'] || t.brand || t.operator || '无名油站';
+        const brand = t.brand || t.operator || '';
+        return { id: e.type[0] + e.id, name, sub: brand && !name.toLowerCase().includes(brand.toLowerCase()) ? brand : (t['addr:street'] || ''), lat: +la.toFixed(6), lon: +lo.toFixed(6), d: haversine(lat, lon, la, lo) };
+      }).sort((a, b) => a.d - b.d).slice(0, 12);
+      return list;
+    }
+  }
+
+  let mapObj = null, mapMarks = [], mapData = null, leafletP = null;
+  function viewMap(A) {
+    const st = stations(A).filter((o) => o.s.lat != null).sort((a, b) => b.n - a.n || (a.last.date < b.last.date ? 1 : -1));
+    mapData = st;
+    if (!st.length) return `<div class="empty">这里会标出你去过的油站。<br>以后记加油时，在「油站」按「附近」选一个，<br>就会出现在地图上。</div>`;
+    return `<div class="card"><div class="map" id="map"></div></div>
+      <div class="month"><b>去过的油站</b><span>${st.length} 个</span></div>
+      <div class="list">${st.map((o, i) => `<button class="row" type="button" data-stn="${i}"><span class="ico fuel">${ICON.fuel}</span><span class="main"><span class="t1"><span class="name">${esc(o.s.name)}</span><span class="amt">${o.n} 次</span></span><span class="t2"><span>最近 RM${fmt(o.last.price, 2)}/L · 合计 ${rm(o.spend)}</span><span class="date">${md(o.last.date)}</span></span></span></button>`).join('')}</div>`;
+  }
+  function loadLeaflet() {
+    if (window.L) return Promise.resolve();
+    return (leafletP ||= new Promise((ok, no) => {
+      const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.append(css);
+      const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+      s.onload = ok; s.onerror = () => { leafletP = null; no(); }; document.head.append(s);
+    }));
+  }
+  function drawMap() {
+    const st = mapData; if (!st || !st.length) return;
+    loadLeaflet().then(() => {
+      const el = $('#map'); if (!el || ui.tab !== 'map') return;
+      if (mapObj) mapObj.remove();
+      mapObj = L.map(el);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapObj);
+      const css = getComputedStyle(document.documentElement);
+      const fill = css.getPropertyValue('--fuel').trim(), ring = css.getPropertyValue('--surface').trim();
+      mapMarks = st.map((o) => L.circleMarker([o.s.lat, o.s.lon], { radius: 9, color: ring, weight: 2, fillColor: fill, fillOpacity: 1 })
+        .bindPopup(`<b>${esc(o.s.name)}</b><br>去过 ${o.n} 次 · 最近 ${md(o.last.date)}<br>RM${fmt(o.last.price, 2)}/L`).addTo(mapObj));
+      mapObj.fitBounds(L.latLngBounds(st.map((o) => [o.s.lat, o.s.lon])), { padding: [30, 30], maxZoom: 15 });
+    }).catch(() => { const el = $('#map'); if (el) el.innerHTML = '<p class="empty">地图载入不了，检查网络。</p>'; });
+  }
+
   // ---------- 新增／编辑 ----------
   let sheetOpen = false;
   function openSheet(rec, kind) {
     const A = analyze();
     const lastFuel = A.fuel.at(-1);
     const lastAny = A.recs.at(-1);
-    const r = rec ? { ...rec } : { id: uid(), type: kind || 'fuel', date: today(), odo: '', total: '', price: lastFuel ? lastFuel.price : '', liters: '', member: false, item: '', note: '' };
+    const r = rec ? { ...rec } : { id: uid(), type: kind || 'fuel', date: today(), odo: '', total: '', price: lastFuel ? lastFuel.price : '', liters: '', station: null, item: '', note: '' };
     const sh = $('#sheet');
+    const favs = stations(A).sort((a, b) => b.n - a.n || (a.last.date < b.last.date ? 1 : -1)).slice(0, 4).map((o) => o.s);
+    let nearList = [];
     const draw = () => {
       const fuel = r.type === 'fuel';
       sh.innerHTML = `
@@ -425,14 +512,19 @@
             <label class="field"><span>里程表（km）</span><input name="odo" inputmode="numeric" value="${esc(r.odo)}" placeholder="${lastAny ? km(lastAny.odo) : ''}"></label>
           </div>
           ${fuel ? `
+          <div class="field"><span>油站</span>
+            <div class="stn"><input name="stname" value="${esc(r.stname ?? r.station?.name ?? '')}" placeholder="打名字，或按「附近」找"><button class="btn" type="button" data-act="near">附近</button></div>
+            ${favs.length ? `<div class="qchips">${favs.map((s, i) => `<button type="button" data-q="${i}">${esc(s.name)}</button>`).join('')}</div>` : ''}
+            <div class="near" id="near"></div>
+          </div>
           <div class="pair">
             <label class="field"><span>总额（RM）</span><input name="total" inputmode="decimal" value="${esc(r.total)}"></label>
             <label class="field"><span>单价（RM/L）</span><input name="price" inputmode="decimal" value="${esc(r.price)}"></label>
           </div>
           <label class="field"><span>公升（L）</span><input name="liters" inputmode="decimal" value="${esc(r.liters)}"><span class="hint">填了总额和单价会自动算；油站单据上有公升数就照抄。</span></label>
-          <label class="field"><span>油种</span><input name="item" value="${esc(r.item || '中级汽油')}"></label>
-          <label class="check"><input name="member" type="checkbox" ${r.member ? 'checked' : ''}>会员</label>
-          <label class="field"><span>备注（油站等）</span><input name="note" value="${esc(r.note)}"></label>` : `
+          <label class="field"><span>油种</span><input name="item" value="${esc(r.item || FUEL_NAME)}"></label>
+          
+          <label class="field"><span>备注</span><input name="note" value="${esc(r.note)}"></label>` : `
           <label class="field"><span>项目</span><input name="item" value="${esc(r.item)}" placeholder="例：换机油"></label>
           <label class="field"><span>金额（RM）</span><input name="total" inputmode="decimal" value="${esc(r.total)}"></label>
           <label class="field"><span>店家／备注</span><input name="note" value="${esc(r.note)}"></label>`}
@@ -449,13 +541,14 @@
         f.total.addEventListener('input', calc);
         f.price.addEventListener('input', calc);
         f.liters.addEventListener('input', () => { litersTouched = f.liters.value.trim() !== ''; });
+        f.stname.addEventListener('input', () => { r.stname = f.stname.value.trim(); if (r.station && r.station.name !== r.stname) r.station = null; });
       }
       f.addEventListener('submit', (e) => { e.preventDefault(); save(); });
     };
     const collect = () => {
       const f = sh.querySelector('form');
       r.date = f.date.value; r.odo = f.odo.value; r.total = f.total.value; r.note = f.note.value.trim(); r.item = f.item.value.trim();
-      if (r.type === 'fuel') { r.price = f.price.value; r.liters = f.liters.value; r.member = f.member.checked; }
+      if (r.type === 'fuel') { r.price = f.price.value; r.liters = f.liters.value; r.stname = f.stname.value.trim(); }
     };
     const save = () => {
       collect();
@@ -471,8 +564,9 @@
         if (!liters) return err('请填公升，或填单价让它自动算');
         out.liters = Math.round(liters * 1000) / 1000;
         out.price = Math.round((price && Math.abs(total / price - liters) < 0.02 ? price : total / liters) * 100) / 100;
-        out.member = !!r.member;
-        out.item = r.item || '中级汽油';
+        const nm = r.stname || '';
+        if (nm) out.station = r.station && r.station.name === nm ? r.station : (favs.concat(stations(analyze()).map((o) => o.s)).find((s) => s.name === nm && s.lat != null) || { name: nm });
+        out.item = r.item || FUEL_NAME;
         // 里程要跟前后两笔对得上
         const others = analyze().fuel.filter((x) => x.id !== r.id);
         const before = others.filter((x) => x.date < out.date || (x.date === out.date && x.odo < out.odo)).at(-1);
@@ -487,13 +581,37 @@
     sh.onclick = (e) => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.kind) { collect(); r.type = b.dataset.kind; if (r.type === 'service') r.item = ''; draw(); return; }
+      if (b.dataset.q != null) { pickStation(favs[+b.dataset.q]); return; }
+      if (b.dataset.pick != null) { pickStation(nearList[+b.dataset.pick]); return; }
       const act = b.dataset.act;
-      if (act === 'close') closeSheet();
+      if (act === 'near') findNear();
+      else if (act === 'close') closeSheet();
       else if (act === 'save') save();
       else if (act === 'del' && confirm(`删除 ${md(rec.date)} ${rm(rec.total)} 这一笔？`)) {
         upsert({ id: rec.id, deleted: true });
         closeSheet(); toast('已删除');
       }
+    };
+    const pickStation = (s) => {
+      if (!s) return;
+      r.station = { id: s.id, name: s.name, lat: s.lat, lon: s.lon };
+      r.stname = s.name;
+      const f = sh.querySelector('form'); if (f && f.stname) f.stname.value = s.name;
+      const box = $('#near'); if (box) box.innerHTML = '';
+    };
+    const findNear = async () => {
+      const msg = (t) => { const box = $('#near'); if (box) box.innerHTML = `<div class="msg">${esc(t)}</div>`; };
+      if (!navigator.geolocation) return msg('这个浏览器不能定位，请直接打名字。');
+      msg('定位中…');
+      let pos;
+      try { pos = await new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 })); }
+      catch (e) { return msg(e.code === 1 ? '没有定位权限：到浏览器设定允许这个网站使用位置，再按一次。' : '定位不到，换个地方再试，或直接打名字。'); }
+      msg('找附近油站…（可能要十几秒）');
+      try { nearList = await nearbyStations(pos.coords.latitude, pos.coords.longitude); }
+      catch { return msg('查不到油站资料（网络不稳？），请直接打名字。'); }
+      const box = $('#near'); if (!box) return;
+      if (!nearList.length) return msg('附近 5 公里内没找到油站，请直接打名字。');
+      box.innerHTML = nearList.map((s, i) => `<button type="button" class="opt" data-pick="${i}"><span>${esc(s.name)}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span><span class="d">${dist(s.d)}</span></button>`).join('');
     };
     draw();
     sh.hidden = false; sheetOpen = true;
@@ -515,7 +633,7 @@
   }
 
   // ---------- CSV ----------
-  const CSV_HEAD = ['日期', '里程(km)', '类别', '项目', '总额(MYR)', '公升', '单价(MYR/L)', '油耗(km/L)', '会员', '备注'];
+  const CSV_HEAD = ['日期', '里程(km)', '类别', '项目', '总额(MYR)', '公升', '单价(MYR/L)', '油耗(km/L)', '油站', '备注'];
   function parseCSV(text) {
     text = text.replace(/^﻿/, '');
     const rows = []; let row = [], f = '', q = false;
@@ -534,7 +652,7 @@
     const rows = parseCSV(text);
     const head = rows.shift() || [];
     const col = (name) => head.findIndex((h) => h.trim().startsWith(name));
-    const c = { date: col('日期'), odo: col('里程'), type: col('类别'), item: col('项目'), total: col('总额'), liters: col('公升'), price: col('单价'), member: col('会员'), note: col('备注') };
+    const c = { date: col('日期'), odo: col('里程'), type: col('类别'), item: col('项目'), total: col('总额'), liters: col('公升'), price: col('单价'), station: col('油站'), note: col('备注') };
     const get = (r, k) => (c[k] >= 0 ? (r[c[k]] || '').trim() : '');
     let added = 0, updated = 0, skipped = 0;
     const stamp = Date.now();
@@ -548,8 +666,8 @@
         if (!liters && price) liters = total / price;
         if (!liters) { skipped++; continue; }
         rec.liters = liters; rec.price = price || Math.round((total / liters) * 100) / 100;
-        rec.member = get(r, 'member') !== '';
-        rec.item = rec.item || '中级汽油';
+        if (!rec.item || rec.item === '中级汽油') rec.item = FUEL_NAME;
+        const sn = get(r, 'station'); if (sn) rec.station = { name: sn };
       }
       const i = db.records.findIndex((x) => x.id === rec.id);
       if (i >= 0) { db.records[i] = rec; updated++; } else { db.records.push(rec); added++; }
@@ -565,7 +683,7 @@
       const i = A.info.get(r.id);
       lines.push([r.date, r.odo, r.type === 'fuel' ? '加油' : '服务', r.item || '', r.total.toFixed(2),
         r.type === 'fuel' ? r.liters : '', r.type === 'fuel' ? r.price.toFixed(2) : '',
-        i && i.kmL != null ? i.kmL.toFixed(3) : '', r.member ? '★' : '', r.note || ''].map((v) => q(String(v))).join(','));
+        i && i.kmL != null ? i.kmL.toFixed(3) : '', r.station?.name || '', r.note || ''].map((v) => q(String(v))).join(','));
     }
     download(`打油记录_${today()}.csv`, '﻿' + lines.join('\r\n'), 'text/csv');
   }
@@ -632,7 +750,7 @@
           else if (res.status !== 404) throw new Error(httpMsg(res.status));
           const rRecs = remote && Array.isArray(remote.records) ? remote.records : [];
           const rMeta = remote && remote.meta;
-          const recs = merge(db.records, rRecs);
+          const recs = migrate(merge(db.records, rRecs));
           const meta = rMeta && (rMeta.updatedAt || 0) > (db.meta.updatedAt || 0) ? rMeta : db.meta;
           if (seq !== editSeq) continue; // 合并期间又改了，重来
           db.records = recs; db.meta = meta; saveDB();
@@ -652,7 +770,7 @@
         sync.state = 'err'; sync.msg = e instanceof TypeError ? `连不上 GitHub（${navigator.onLine ? '检查令牌有没有贴错，或关掉广告拦截／VPN' : '没有网络'}；${e.message}）` : e.message;
       } finally {
         syncRunning = null;
-        if (sheetOpen) renderSync(); else render();
+        if (sheetOpen || ui.tab === 'map') renderSync(); else render();
         if (syncAgain) { syncAgain = false; setTimeout(doSync, 300); }
       }
     })();
@@ -664,10 +782,15 @@
   // ---------- 事件 ----------
   document.addEventListener('click', (e) => {
     if (e.target.closest('#sheet')) return;
-    const t = e.target.closest('[data-tab],[data-act],[data-id],[data-range]');
+    const t = e.target.closest('[data-tab],[data-act],[data-id],[data-range],[data-stn]');
     if (!t) return;
     if (t.dataset.tab) { ui.tab = t.dataset.tab; saveUI(); render(); window.scrollTo(0, 0); return; }
     if (t.dataset.range) { ui.range = t.dataset.range; saveUI(); render(); return; }
+    if (t.dataset.stn != null) {
+      const m = mapMarks[+t.dataset.stn];
+      if (m && mapObj) { mapObj.setView(m.getLatLng(), 16); m.openPopup(); $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+      return;
+    }
     if (t.dataset.id) { const r = db.records.find((x) => x.id === t.dataset.id); if (r) openSheet(r); return; }
     switch (t.dataset.act) {
       case 'add': openSheet(null, 'fuel'); break;
