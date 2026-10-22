@@ -459,11 +459,11 @@
     }
   }
 
-  let mapObj = null, mapMarks = [], mapData = null, leafletP = null;
+  let mapObj = null, mapMarks = [], mapData = null, leafletP = null, nearMap = null;
   function viewMap(A) {
     const st = stations(A).filter((o) => o.s.lat != null).sort((a, b) => b.n - a.n || (a.last.date < b.last.date ? 1 : -1));
     mapData = st;
-    if (!st.length) return `<div class="empty">这里会标出你去过的油站。<br>以后记加油时，在「油站」按「附近」选一个，<br>就会出现在地图上。</div>`;
+    if (!st.length) return `<div class="card"><div class="map" id="map"></div></div><p class="muted" style="text-align:center;font-size:13px">还没有标记。以后记加油时在「油站」按「附近」选一个，<br>去过的油站就会标在这张地图上。</p>`;
     return `<div class="card"><div class="map" id="map"></div></div>
       <div class="month"><b>去过的油站</b><span>${st.length} 个</span></div>
       <div class="list">${st.map((o, i) => `<button class="row" type="button" data-stn="${i}"><span class="ico fuel">${ICON.fuel}</span><span class="main"><span class="t1"><span class="name">${esc(o.s.name)}</span><span class="amt">${o.n} 次</span></span><span class="t2"><span>最近 RM${fmt(o.last.price, 2)}/L · 合计 ${rm(o.spend)}</span><span class="date">${md(o.last.date)}</span></span></span></button>`).join('')}</div>`;
@@ -477,7 +477,7 @@
     }));
   }
   function drawMap() {
-    const st = mapData; if (!st || !st.length) return;
+    const st = mapData || [];
     loadLeaflet().then(() => {
       const el = $('#map'); if (!el || ui.tab !== 'map') return;
       if (mapObj) mapObj.remove();
@@ -487,7 +487,17 @@
       const fill = css.getPropertyValue('--fuel').trim(), ring = css.getPropertyValue('--surface').trim();
       mapMarks = st.map((o) => L.circleMarker([o.s.lat, o.s.lon], { radius: 9, color: ring, weight: 2, fillColor: fill, fillOpacity: 1 })
         .bindPopup(`<b>${esc(o.s.name)}</b><br>去过 ${o.n} 次 · 最近 ${md(o.last.date)}<br>RM${fmt(o.last.price, 2)}/L`).addTo(mapObj));
-      mapObj.fitBounds(L.latLngBounds(st.map((o) => [o.s.lat, o.s.lon])), { padding: [30, 30], maxZoom: 15 });
+      if (st.length) mapObj.fitBounds(L.latLngBounds(st.map((o) => [o.s.lat, o.s.lon])), { padding: [30, 30], maxZoom: 15 });
+      else {
+        mapObj.setView([4.2, 102.0], 6); // 先显示全马，定位到了再移过去
+        const m = mapObj;
+        navigator.geolocation?.getCurrentPosition((p) => {
+          if (mapObj !== m) return;
+          const ll = [p.coords.latitude, p.coords.longitude];
+          m.setView(ll, 14);
+          L.circleMarker(ll, { radius: 7, color: ring, weight: 2, fillColor: css.getPropertyValue('--accent').trim(), fillOpacity: 1 }).bindPopup('你在这里').addTo(m);
+        }, () => {}, { timeout: 15000, maximumAge: 300000 });
+      }
     }).catch(() => { const el = $('#map'); if (el) el.innerHTML = '<p class="empty">地图载入不了，检查网络。</p>'; });
   }
 
@@ -501,6 +511,7 @@
     const sh = $('#sheet');
     const favs = stations(A).sort((a, b) => b.n - a.n || (a.last.date < b.last.date ? 1 : -1)).slice(0, 4).map((o) => o.s);
     let nearList = [];
+    if (nearMap) { nearMap.remove(); nearMap = null; }
     const draw = () => {
       const fuel = r.type === 'fuel';
       sh.innerHTML = `
@@ -597,6 +608,7 @@
       r.station = { id: s.id, name: s.name, lat: s.lat, lon: s.lon };
       r.stname = s.name;
       const f = sh.querySelector('form'); if (f && f.stname) f.stname.value = s.name;
+      if (nearMap) { nearMap.remove(); nearMap = null; }
       const box = $('#near'); if (box) box.innerHTML = '';
     };
     const findNear = async () => {
@@ -611,7 +623,20 @@
       catch { return msg('查不到油站资料（网络不稳？），请直接打名字。'); }
       const box = $('#near'); if (!box) return;
       if (!nearList.length) return msg('附近 5 公里内没找到油站，请直接打名字。');
-      box.innerHTML = nearList.map((s, i) => `<button type="button" class="opt" data-pick="${i}"><span>${esc(s.name)}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span><span class="d">${dist(s.d)}</span></button>`).join('');
+      box.innerHTML = `<div class="map nearmap" id="nearmap"></div>` + nearList.map((s, i) => `<button type="button" class="opt" data-pick="${i}"><span class="no">${i + 1}</span><span class="nm">${esc(s.name)}${i === 0 && s.d < 150 ? '<span class="tag">就在旁边</span>' : ''}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span><span class="d">${dist(s.d)}</span></button>`).join('');
+      // 小地图：你的位置＋编号油站，点油站就选它
+      loadLeaflet().then(() => {
+        const el = $('#nearmap'); if (!el) return;
+        if (nearMap) nearMap.remove();
+        nearMap = L.map(el, { zoomControl: false });
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(nearMap);
+        const me = [pos.coords.latitude, pos.coords.longitude];
+        const css = getComputedStyle(document.documentElement);
+        L.circleMarker(me, { radius: 7, color: css.getPropertyValue('--surface').trim(), weight: 2, fillColor: css.getPropertyValue('--accent').trim(), fillOpacity: 1 }).addTo(nearMap);
+        nearList.forEach((s, i) => L.marker([s.lat, s.lon], { icon: L.divIcon({ className: '', html: `<div class="pin">${i + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }) })
+          .on('click', () => pickStation(s)).addTo(nearMap));
+        nearMap.fitBounds(L.latLngBounds([me, ...nearList.slice(0, 5).map((s) => [s.lat, s.lon])]), { padding: [24, 24], maxZoom: 17 });
+      }).catch(() => { const el = $('#nearmap'); if (el) el.remove(); });
     };
     draw();
     sh.hidden = false; sheetOpen = true;
