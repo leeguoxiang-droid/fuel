@@ -1,5 +1,5 @@
 // 网络优先：有网络就拿最新版并更新缓存，没网络才用缓存。改版时把 CACHE 加一号。
-const CACHE = 'fuel-v1';
+const CACHE = 'fuel-v2';
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

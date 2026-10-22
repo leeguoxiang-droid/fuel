@@ -9,6 +9,7 @@
 
   let db = store.get(LS.data, null) || { meta: { car: '我的车', updatedAt: 0 }, records: [], dirty: false };
   let cfg = store.get(LS.cfg, null) || { owner: '', repo: '', path: 'fuel.json', token: '' };
+  cfg.token = (cfg.token || '').replace(/[^!-~]/g, '');
   let ui = store.get(LS.ui, null) || { tab: 'home', range: '12', theme: 'auto' };
   let editSeq = 0;
   const saveDB = () => store.set(LS.data, db);
@@ -648,7 +649,7 @@
         }
         sync.state = 'ok'; sync.msg = ''; sync.at = Date.now(); store.set('fuel-sync-at', sync.at);
       } catch (e) {
-        sync.state = 'err'; sync.msg = e instanceof TypeError ? '连不上 GitHub' : e.message;
+        sync.state = 'err'; sync.msg = e instanceof TypeError ? `连不上 GitHub（${navigator.onLine ? '检查令牌有没有贴错，或关掉广告拦截／VPN' : '没有网络'}；${e.message}）` : e.message;
       } finally {
         syncRunning = null;
         if (sheetOpen) renderSync(); else render();
@@ -674,7 +675,7 @@
         if (cfgReady()) doSync(); else { ui.tab = 'set'; saveUI(); render(); }
         break;
       case 'savecfg':
-        cfg = { owner: $('#s-owner').value.trim(), repo: $('#s-repo').value.trim(), path: $('#s-path').value.trim() || 'fuel.json', token: $('#s-token').value.trim() };
+        cfg = { owner: $('#s-owner').value.trim(), repo: $('#s-repo').value.trim(), path: $('#s-path').value.trim() || 'fuel.json', token: $('#s-token').value.replace(/[^!-~]/g, '') };
         store.set(LS.cfg, cfg);
         if (!cfgReady()) { toast('账号、仓库、令牌三项都要填'); renderSync(); break; }
         doSync().then(() => toast(sync.state === 'ok' ? '同步好了' : syncText(true)));
