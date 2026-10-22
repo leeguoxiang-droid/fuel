@@ -446,15 +446,21 @@
     }
     throw last;
   }
+  // 峇株巴辖一带的油站和地图已存在 App 里（map/），在这范围内不用等网络
+  const BP = [[1.61, 102.76], [2.21, 103.27]];
+  const MAPFILE = 'map/bp-20261021.pmtiles';
+  const inBP = (la, lo) => la > BP[0][0] && la < BP[1][0] && lo > BP[0][1] && lo < BP[1][1];
   async function nearbyStations(lat, lon) {
     for (const rad of [5000]) {
-      const els = await overpass(`[out:json][timeout:30];(node["amenity"="fuel"](around:${rad},${lat},${lon});way["amenity"="fuel"](around:${rad},${lat},${lon}););out center tags;`);
+      let els = null;
+      if (inBP(lat, lon)) { try { els = (await (await fetch('map/bp-stations.json')).json()).elements; } catch {} }
+      if (!els) els = await overpass(`[out:json][timeout:30];(node["amenity"="fuel"](around:${rad},${lat},${lon});way["amenity"="fuel"](around:${rad},${lat},${lon}););out center tags;`);
       const list = els.filter((e) => (e.lat ?? e.center?.lat) != null).map((e) => {
         const t = e.tags || {}, la = e.lat ?? e.center.lat, lo = e.lon ?? e.center.lon;
         const name = t.name || t['name:en'] || t.brand || t.operator || '无名油站';
         const brand = t.brand || t.operator || '';
         return { id: e.type[0] + e.id, name, sub: brand && !name.toLowerCase().includes(brand.toLowerCase()) ? brand : (t['addr:street'] || ''), lat: +la.toFixed(6), lon: +lo.toFixed(6), d: haversine(lat, lon, la, lo) };
-      }).sort((a, b) => a.d - b.d).slice(0, 12);
+      }).filter((s) => s.d <= rad).sort((a, b) => a.d - b.d).slice(0, 12);
       return list;
     }
   }
@@ -470,11 +476,21 @@
   }
   function loadLeaflet() {
     if (window.L) return Promise.resolve();
-    return (leafletP ||= new Promise((ok, no) => {
-      const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.append(css);
-      const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-      s.onload = ok; s.onerror = () => { leafletP = null; no(); }; document.head.append(s);
-    }));
+    const js = (src) => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = no; document.head.append(s); });
+    return (leafletP ||= (() => {
+      const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'lib/leaflet-1.9.4.css'; document.head.append(css);
+      return js('lib/leaflet-1.9.4.js').then(() => js('lib/protomaps-leaflet-5.0.1.js'));
+    })().catch((e) => { leafletP = null; throw e; }));
+  }
+  // 底图：峇株巴辖用存在手机里的地图（离线也能看）；画面超出这范围才加载网上的 OSM 图块
+  function baseMap(map) {
+    protomapsL.leafletLayer({ url: MAPFILE, flavor: 'light', lang: 'en', bounds: BP, zIndex: 2, attribution: '© OpenStreetMap · Protomaps' }).addTo(map);
+    const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, zIndex: 1, attribution: '© OpenStreetMap' });
+    const box = L.latLngBounds(BP);
+    map.on('moveend', () => {
+      const need = !box.contains(map.getBounds());
+      if (need && !map.hasLayer(osm)) osm.addTo(map); else if (!need && map.hasLayer(osm)) map.removeLayer(osm);
+    });
   }
   function drawMap() {
     const st = mapData || [];
@@ -482,7 +498,7 @@
       const el = $('#map'); if (!el || ui.tab !== 'map') return;
       if (mapObj) mapObj.remove();
       mapObj = L.map(el);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapObj);
+      baseMap(mapObj);
       const css = getComputedStyle(document.documentElement);
       const fill = css.getPropertyValue('--fuel').trim(), ring = css.getPropertyValue('--surface').trim();
       mapMarks = st.map((o) => L.circleMarker([o.s.lat, o.s.lon], { radius: 9, color: ring, weight: 2, fillColor: fill, fillOpacity: 1 })
@@ -629,7 +645,7 @@
         const el = $('#nearmap'); if (!el) return;
         if (nearMap) nearMap.remove();
         nearMap = L.map(el, { zoomControl: false });
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(nearMap);
+        baseMap(nearMap);
         const me = [pos.coords.latitude, pos.coords.longitude];
         const css = getComputedStyle(document.documentElement);
         L.circleMarker(me, { radius: 7, color: css.getPropertyValue('--surface').trim(), weight: 2, fillColor: css.getPropertyValue('--accent').trim(), fillOpacity: 1 }).addTo(nearMap);
